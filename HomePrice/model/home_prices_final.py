@@ -1,337 +1,282 @@
 # %%
-# ------------------------------------------------------------
-# MODEL & PROJECT DOCUMENTATION — BANGALORE HOME PRICE PREDICTION
-# ------------------------------------------------------------
-# PROJECT GOAL:
-#   Build a regression model to predict home prices in Bangalore
-#   using cleaned, engineered, and encoded real-estate features.
-#
-# MODEL USED:
-#   Linear Regression (final model)
-#
-# WHY LINEAR REGRESSION?
-#   • Simple and interpretable
-#   • Works well when relationship between features and target
-#     is approximately linear
-#   • Performs well after removing outliers
-#
-# OTHER MODELS TESTED:
-#   • Lasso Regression (L1 Regularization)
-#   • Decision Tree Regression
-#   • GridSearchCV used to find best model
-#
-# FEATURES USED:
-#   • total_sqft
-#   • bath
-#   • bhk
-#   • location (one-hot encoded)
-#
-# WHAT THIS CODE DOES (STEP-BY-STEP):
-#   1. Load dataset
-#   2. Drop unnecessary columns
-#   3. Handle missing values
-#   4. Feature engineering (bhk, total_sqft conversion)
-#   5. Create price_per_sqft
-#   6. Dimensionality reduction for location
-#   7. Remove outliers using business logic
-#   8. Remove outliers using standard deviation
-#   9. Remove outliers using bhk comparison
-#  10. Encode location using one-hot encoding
-#  11. Train Linear Regression model
-#  12. Evaluate using cross-validation
-#  13. Use GridSearchCV to find best model
-#  14. Predict price for sample properties
-#  15. Export model + columns to files
-#
-# PRINTED OUTPUTS:
-#   • DataFrame heads
-#   • Shapes
-#   • Scores
-#   • Predictions
-#
-# ------------------------------------------------------------
+# ============================================================
+# BANGALORE HOME PRICE PREDICTION — CLEAN & PROFESSIONAL VERSION
+# ============================================================
 
-
-# %%
-# ------------------------------------------------------------
-# IMPORT LIBRARIES
-# ------------------------------------------------------------
 import pandas as pd
 import numpy as np
-from matplotlib import pyplot as plt
-import matplotlib
+from sklearn.model_selection import (
+    train_test_split,
+    ShuffleSplit,
+    cross_val_score,
+    GridSearchCV,
+)
+from sklearn.linear_model import LinearRegression, Lasso
+from sklearn.tree import DecisionTreeRegressor
+import pickle
+import json
 
-matplotlib.rcParams["figure.figsize"] = (20, 10)
-
-# %%
-# ------------------------------------------------------------
-# LOAD DATASET
-# ------------------------------------------------------------
-df1 = pd.read_csv("../data/bengaluru_house_prices.csv")
-df1.head()  # Important DataFrame
-
-df1.shape
-df1.columns
-df1["area_type"].value_counts()
+print("📌 Starting preprocessing pipeline...")
 
 # %%
-# ------------------------------------------------------------
-# DROP UNUSED COLUMNS
-# ------------------------------------------------------------
-df2 = df1.drop(["area_type", "society", "balcony", "availability"], axis="columns")
-df2.head()  # Important DataFrame
+# ============================================================
+# LOAD & INITIAL CLEANING
+# ============================================================
+
+print("➡ Loading dataset...")
+df = pd.read_csv("../data/bengaluru_house_prices.csv")
+print(f"✔ Loaded dataset with shape: {df.shape}")
+
+# Drop unused columns
+df = df.drop(["area_type", "society", "balcony", "availability"], axis=1)
+print("✔ Dropped unused columns")
+
+# Remove missing values
+df = df.dropna()
+print(f"✔ Removed missing values. New shape: {df.shape}")
 
 # %%
-# ------------------------------------------------------------
-# HANDLE MISSING VALUES
-# ------------------------------------------------------------
-df3 = df2.dropna()
-df3.head()  # Important DataFrame
+# ============================================================
+# FEATURE ENGINEERING
+# ============================================================
 
-# %%
-# ------------------------------------------------------------
-# FEATURE ENGINEERING — CREATE BHK
-# ------------------------------------------------------------
-df3["bhk"] = df3["size"].apply(lambda x: int(x.split(" ")[0]))
-df3.bhk.unique()
+print("➡ Extracting BHK from size column...")
+df["bhk"] = df["size"].apply(lambda x: int(x.split(" ")[0]))
+
+print("➡ Converting total_sqft ranges to numeric...")
 
 
-# %%
-# ------------------------------------------------------------
-# CLEAN total_sqft (convert ranges → average)
-# ------------------------------------------------------------
-def is_float(x):
+def convert_sqft(x):
     try:
-        float(x)
-        return True
-    except:
-        return False
-
-
-df3[~df3["total_sqft"].apply(is_float)].head(10)
-
-
-def convert_sqft_to_num(x):
-    tokens = x.split("-")
-    if len(tokens) == 2:
-        return (float(tokens[0]) + float(tokens[1])) / 2
-    try:
+        if "-" in x:
+            a, b = x.split("-")
+            return (float(a) + float(b)) / 2
         return float(x)
     except:
         return None
 
 
-df4 = df3.copy()
-df4.total_sqft = df4.total_sqft.apply(convert_sqft_to_num)
-df4 = df4[df4.total_sqft.notnull()]
-df4.head(2)
+df["total_sqft"] = df["total_sqft"].apply(convert_sqft)
+df = df[df.total_sqft.notnull()]
+print(f"✔ Cleaned total_sqft. Shape: {df.shape}")
 
 # %%
-# ------------------------------------------------------------
-# FEATURE ENGINEERING — price_per_sqft
-# ------------------------------------------------------------
-df5 = df4.copy()
-df5["price_per_sqft"] = df5["price"] * 100000 / df5["total_sqft"]
-df5.head()  # Important DataFrame
-
-df5_stats = df5["price_per_sqft"].describe()
+# Show df4.head() as requested
+print("📌 Displaying cleaned sqft DataFrame (df4 equivalent):")
+df4 = df.copy()
+df4.head()
 
 # %%
-# ------------------------------------------------------------
-# DIMENSIONALITY REDUCTION — LOCATION
-# ------------------------------------------------------------
-df5.location = df5.location.apply(lambda x: x.strip())
-location_stats = df5["location"].value_counts()
+# ============================================================
+# PRICE PER SQFT
+# ============================================================
 
-location_stats_less_than_10 = location_stats[location_stats <= 10]
-df5.location = df5.location.apply(
-    lambda x: "other" if x in location_stats_less_than_10 else x
-)
-df5.head(10)
+print("➡ Creating price_per_sqft feature...")
+df["price_per_sqft"] = df["price"] * 100000 / df["total_sqft"]
+print("✔ price_per_sqft created")
 
 # %%
-# ------------------------------------------------------------
-# OUTLIER REMOVAL — sqft per bhk rule
-# ------------------------------------------------------------
-df6 = df5[~(df5.total_sqft / df5.bhk < 300)]
-df6.shape
+# ============================================================
+# LOCATION CLEANING & DIMENSIONALITY REDUCTION
+# ============================================================
 
+print("➡ Cleaning location values...")
+df["location"] = df["location"].str.strip()
+
+location_counts = df["location"].value_counts()
+rare_locations = location_counts[location_counts <= 10].index
+
+df["location"] = df["location"].apply(lambda x: "other" if x in rare_locations else x)
+print("✔ Location dimensionality reduced")
 
 # %%
-# ------------------------------------------------------------
-# OUTLIER REMOVAL — price_per_sqft using mean & std
-# ------------------------------------------------------------
+# ============================================================
+# OUTLIER REMOVAL
+# ============================================================
+
+print("➡ Removing sqft-per-BHK outliers...")
+df = df[df.total_sqft / df.bhk >= 300]
+print(f"✔ After sqft-per-BHK rule: {df.shape}")
+
+print("➡ Removing price_per_sqft outliers...")
+
+
 def remove_pps_outliers(df):
-    df_out = pd.DataFrame()
-    for key, subdf in df.groupby("location"):
-        m = np.mean(subdf.price_per_sqft)
-        st = np.std(subdf.price_per_sqft)
-        reduced_df = subdf[
-            (subdf.price_per_sqft > (m - st)) & (subdf.price_per_sqft <= (m + st))
+    cleaned = []
+    for loc, subdf in df.groupby("location"):
+        mean, std = subdf.price_per_sqft.mean(), subdf.price_per_sqft.std()
+        filtered = subdf[
+            (subdf.price_per_sqft > mean - std) & (subdf.price_per_sqft <= mean + std)
         ]
-        df_out = pd.concat([df_out, reduced_df], ignore_index=True)
-    return df_out
+        cleaned.append(filtered)
+    return pd.concat(cleaned, ignore_index=True)
 
 
-df7 = remove_pps_outliers(df6)
-df7.shape
+df = remove_pps_outliers(df)
+print(f"✔ After price_per_sqft outlier removal: {df.shape}")
+
+print("➡ Removing BHK outliers...")
 
 
-# %%
-# ------------------------------------------------------------
-# OUTLIER REMOVAL — bhk comparison logic
-# ------------------------------------------------------------
 def remove_bhk_outliers(df):
-    exclude_indices = np.array([])
-    for location, location_df in df.groupby("location"):
-        bhk_stats = {}
-        for bhk, bhk_df in location_df.groupby("bhk"):
-            bhk_stats[bhk] = {
-                "mean": np.mean(bhk_df.price_per_sqft),
-                "std": np.std(bhk_df.price_per_sqft),
-                "count": bhk_df.shape[0],
+    indices_to_remove = []
+    for loc, loc_df in df.groupby("location"):
+        bhk_stats = {
+            bhk: {
+                "mean": subdf.price_per_sqft.mean(),
+                "std": subdf.price_per_sqft.std(),
+                "count": subdf.shape[0],
             }
-        for bhk, bhk_df in location_df.groupby("bhk"):
-            stats = bhk_stats.get(bhk - 1)
-            if stats and stats["count"] > 5:
-                exclude_indices = np.append(
-                    exclude_indices,
-                    bhk_df[bhk_df.price_per_sqft < stats["mean"]].index.values,
-                )
-    return df.drop(exclude_indices, axis="index")
+            for bhk, subdf in loc_df.groupby("bhk")
+        }
+        for bhk, subdf in loc_df.groupby("bhk"):
+            prev_stats = bhk_stats.get(bhk - 1)
+            if prev_stats and prev_stats["count"] > 5:
+                bad_idx = subdf[subdf.price_per_sqft < prev_stats["mean"]].index
+                indices_to_remove.extend(bad_idx)
+    return df.drop(indices_to_remove)
 
 
-df8 = remove_bhk_outliers(df7)
-df8.shape
+df = remove_bhk_outliers(df)
+print(f"✔ After BHK outlier removal: {df.shape}")
 
-# %%
-# ------------------------------------------------------------
-# OUTLIER REMOVAL — bathroom rule
-# ------------------------------------------------------------
-df9 = df8[df8.bath < df8.bhk + 2]
-df9.shape
-
-df10 = df9.drop(["size", "price_per_sqft"], axis="columns")
-df10.head(3)
+print("➡ Applying bathroom rule...")
+df = df[df.bath < df.bhk + 2]
+print(f"✔ After bathroom rule: {df.shape}")
 
 # %%
-# ------------------------------------------------------------
-# ONE-HOT ENCODING — LOCATION
-# ------------------------------------------------------------
-dummies = pd.get_dummies(df10.location)
-df11 = pd.concat([df10, dummies.drop("other", axis="columns")], axis="columns")
-df12 = df11.drop("location", axis="columns")
-df12.head(2)
+# ============================================================
+# FINAL CLEANUP & ENCODING
+# ============================================================
+
+df = df.drop(["size", "price_per_sqft"], axis=1)
+print("✔ Dropped size & price_per_sqft")
+
+df = pd.get_dummies(df, columns=["location"], drop_first=True)
+print(f"✔ One-hot encoded locations. Final shape: {df.shape}")
 
 # %%
-# ------------------------------------------------------------
-# TRAIN LINEAR REGRESSION MODEL
-# ------------------------------------------------------------
-X = df12.drop(["price"], axis="columns")
-y = df12.price
+# ============================================================
+# TRAIN / TEST SPLIT
+# ============================================================
 
-from sklearn.model_selection import train_test_split
+X = df.drop("price", axis=1)
+y = df["price"]
 
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=10
 )
-
-from sklearn.linear_model import LinearRegression
-
-lr_clf = LinearRegression()
-lr_clf.fit(X_train, y_train)
-
-print("Linear Regression Test Score:", lr_clf.score(X_test, y_test))
+print("✔ Train-test split completed")
 
 # %%
-# ------------------------------------------------------------
-# CROSS VALIDATION SCORE
-# ------------------------------------------------------------
-from sklearn.model_selection import ShuffleSplit, cross_val_score
+# ============================================================
+# TRAIN LINEAR REGRESSION MODEL
+# ============================================================
 
+print("➡ Training Linear Regression model...")
+lr_model = LinearRegression()
+lr_model.fit(X_train, y_train)
+
+print(f"✔ Linear Regression R² Score: {lr_model.score(X_test, y_test):.4f}")
+
+# %%
+# ============================================================
+# CROSS VALIDATION
+# ============================================================
+
+print("➡ Running cross-validation...")
 cv = ShuffleSplit(n_splits=5, test_size=0.2, random_state=0)
-cross_val_score(LinearRegression(), X, y, cv=cv)
+cv_scores = cross_val_score(LinearRegression(), X, y, cv=cv)
+print(f"✔ Cross-validation scores: {cv_scores}")
 
 # %%
-# ------------------------------------------------------------
-# GRIDSEARCHCV — FIND BEST MODEL
-# ------------------------------------------------------------
-from sklearn.model_selection import GridSearchCV
-from sklearn.linear_model import Lasso
-from sklearn.tree import DecisionTreeRegressor
+# ============================================================
+# GRIDSEARCHCV — BEST MODEL SELECTION
+# ============================================================
+
+print("➡ Running GridSearchCV for best model...")
 
 
-def find_best_model_using_gridsearchcv(X, y):
-    algos = {
+def find_best_model(X, y):
+    models = {
         "linear_regression": {
             "model": LinearRegression(),
-            "params": {"normalize": [True, False]},
+            "params": {
+                "fit_intercept": [True, False],
+                "copy_X": [True, False],
+                "positive": [True, False],
+            },
         },
         "lasso": {
             "model": Lasso(),
-            "params": {"alpha": [1, 2], "selection": ["random", "cyclic"]},
+            "params": {
+                "alpha": [0.1, 1, 5],
+                "selection": ["random", "cyclic"],
+            },
         },
         "decision_tree": {
             "model": DecisionTreeRegressor(),
             "params": {
-                "criterion": ["mse", "friedman_mse"],
+                "criterion": ["squared_error", "friedman_mse"],
                 "splitter": ["best", "random"],
             },
         },
     }
-    scores = []
+
+    results = []
     cv = ShuffleSplit(n_splits=5, test_size=0.2, random_state=0)
 
-    for algo_name, config in algos.items():
-        gs = GridSearchCV(
-            config["model"], config["params"], cv=cv, return_train_score=False
-        )
+    for name, cfg in models.items():
+        gs = GridSearchCV(cfg["model"], cfg["params"], cv=cv, return_train_score=False)
         gs.fit(X, y)
-        scores.append(
+        results.append(
             {
-                "model": algo_name,
+                "model": name,
                 "best_score": gs.best_score_,
                 "best_params": gs.best_params_,
             }
         )
+        print(f"✔ {name} best score: {gs.best_score_}, params: {gs.best_params_}")
 
-    return pd.DataFrame(scores, columns=["model", "best_score", "best_params"])
+    return pd.DataFrame(results)
 
 
-find_best_model_using_gridsearchcv(X, y)
-
+best_models_df = find_best_model(X, y)
+print(best_models_df)
 
 # %%
-# ------------------------------------------------------------
+# ============================================================
 # PRICE PREDICTION FUNCTION
-# ------------------------------------------------------------
+# ============================================================
+
+
 def predict_price(location, sqft, bath, bhk):
-    loc_index = np.where(X.columns == location)[0][0]
-
     x = np.zeros(len(X.columns))
-    x[0] = sqft
-    x[1] = bath
-    x[2] = bhk
-    if loc_index >= 0:
-        x[loc_index] = 1
+    x[0], x[1], x[2] = sqft, bath, bhk
 
-    return lr_clf.predict([x])[0]
+    loc_col = f"location_{location.lower()}"
+    if loc_col in X.columns:
+        x[X.columns.get_loc(loc_col)] = 1
+
+    return lr_model.predict([x])[0]
 
 
-print(predict_price("1st Phase JP Nagar", 1000, 2, 2))
-print(predict_price("Indira Nagar", 1000, 3, 3))
+print("➡ Sample predictions:")
+print("JP Nagar:", predict_price("1st Phase JP Nagar", 1000, 2, 2))
+print("Indira Nagar:", predict_price("Indira Nagar", 1000, 3, 3))
 
 # %%
-# ------------------------------------------------------------
-# EXPORT MODEL + COLUMNS
-# ------------------------------------------------------------
-import pickle
+# ============================================================
+# EXPORT MODEL & METADATA
+# ============================================================
 
-with open("banglore_home_prices_model.pickle", "wb") as f:
-    pickle.dump(lr_clf, f)
+print("➡ Exporting model and metadata...")
 
-import json
+with open("../server/artifacts/home_prices_model.pickle", "wb") as f:
+    pickle.dump(lr_model, f)
 
 columns = {"data_columns": [col.lower() for col in X.columns]}
-with open("columns.json", "w") as f:
-    f.write(json.dumps(columns))
+with open("../server/artifacts/columns.json", "w") as f:
+    json.dump(columns, f)
+
+print("✔ Model and columns exported successfully")
