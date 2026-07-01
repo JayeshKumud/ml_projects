@@ -1,4 +1,4 @@
-# NLP Course Environment Setup
+# Environment Setup
 
 **Windows + VS Code + Miniconda + Python 3.12**
 
