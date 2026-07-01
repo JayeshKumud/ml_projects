@@ -67,7 +67,7 @@ matplotlib.rcParams["figure.figsize"] = (20, 10)
 # ------------------------------------------------------------
 # LOAD DATASET
 # ------------------------------------------------------------
-df1 = pd.read_csv("bengaluru_house_prices.csv")
+df1 = pd.read_csv("../data/bengaluru_house_prices.csv")
 df1.head()  # Important DataFrame
 
 df1.shape
